@@ -112,5 +112,29 @@ class VcatTestVectorPlaylistCatalog:
             "playlists": [asset.to_dict() for asset in self.playlists]
         }
 
+# VcatTestVectorCatalogAsset that extends VcatTestVectorAsset
+@dataclass
+class VcatTestVectorCatalogAsset(VcatTestVectorAsset):
+    uuid: str
+    description: str  # Now a required field with no default value
 
+    def to_dict(self) -> dict:
+        """Converts the VcatTestVectorPlaylistAsset instance to a dictionary."""
+        asset_dict = super().to_dict()  # Call the parent's to_dict method
+        asset_dict.update({
+            "uuid": self.uuid,
+            "description": self.description,
+        })
+        return asset_dict
 
+@dataclass
+class VcatTestVectorCatalogIndex:
+    vcat_testvector_header: VcatTestVectorHeader
+    catalogs: List[VcatTestVectorCatalogAsset]  # List of VcatTestVectorPlaylistAsset objects
+
+    def to_dict(self) -> dict:
+        """Converts the VcatTestVectorCatalogIndex instance to a dictionary."""
+        return {
+            "vcat_testvector_header": self.vcat_testvector_header.to_dict(),
+            "catalogs": [asset.to_dict() for asset in self.catalogs]
+        }

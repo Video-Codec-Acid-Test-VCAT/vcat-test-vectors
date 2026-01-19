@@ -52,7 +52,7 @@ def generate_playlist_from_video_manifest(manifest_path: Path):
 
     # 5) Build the playlist header
     playlist_header = VcatTestVectorHeader(
-        name        = header["name"] + "_playlist",
+        name        = header["name"],
         description = f"Playlist for {header['name']}",
         created_by  = header["created_by"]
     )
@@ -64,7 +64,7 @@ def generate_playlist_from_video_manifest(manifest_path: Path):
     )
 
     # 7) Write it back out alongside the video manifests
-    out_name   = f"{playlist_header.name}.json"
+    out_name   = f"{playlist_header.name}_playlist.json"
     out_path   = cfg.MANIFEST_DIR / out_name
     with out_path.open("w") as out:
         json.dump(playlist_manifest.to_dict(), out, indent=2)

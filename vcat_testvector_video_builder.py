@@ -172,6 +172,8 @@ def get_video_details(file_path):
             codec = "video/av1"
         elif "Video: vp9" in stderr_output:  # Look for 'vp9' codec specifically
             codec = 'video/mp4; codecs="vp09"'
+        elif "Video: vvc" in stderr_output:  # Look for 'vvc' codec specifically
+            codec = 'video/mp4; codecs="vvc"'
         else:
             codec = "Unknown"
 
@@ -199,9 +201,11 @@ def get_video_details(file_path):
         else:
             frame_rate = "unknown"
 
-        print(f"Resolution: {resolution_x_y}, Frame Rate: {frame_rate}")  # Debugging output for resolution and frame rate
+        frame_rate_str = f"{frame_rate:g}"
 
-        return codec, duration_ms, resolution_x_y, frame_rate
+        print(f"Resolution: {resolution_x_y}, Frame Rate: {frame_rate_str}")  # Debugging output for resolution and frame rate
+
+        return codec, duration_ms, resolution_x_y, frame_rate_str
 
     except Exception as e:
         unknown = "unknown"
@@ -214,12 +218,13 @@ def generate_header_title(video_file: str, video_mime_type: str, resolution_x_y:
     base_name = ""
 
     # Handle AV1 mime type
-    if 'av1' in video_mime_type.lower():
-        base_name = f"av1-{resolution_x_y}p{frame_rate}"
-
+    if 'av1' in video_mime_type.lower() :
+        base_name = f"av1-{resolution_x_y}p{frame_rate}fps"
+    elif 'vvc' in video_mime_type.lower() :
+        base_name = f"vvc-{resolution_x_y}p{frame_rate}fps"
     # Handle VP9 mime type
     elif 'vp09' in video_mime_type.lower():
-        base_name = f"vp9-{resolution_x_y}p{frame_rate}"
+        base_name = f"vp9-{resolution_x_y}p{frame_rate}fps"
 
     # Default behavior if mime type is neither av1 nor vp9
     if not base_name:

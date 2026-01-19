@@ -50,8 +50,8 @@ def build_catalog() -> VcatTestVectorPlaylistCatalog:
 
     # 4) Create a fresh catalog header
     catalog_header = VcatTestVectorHeader(
-        name        = "VCAT Demo Test Assets",
-        description = "Auto‐generated playlist catalog",
+        name        = "VCAT Demo AV1 Vertical Test Assets",
+        description = "AV1 vertical test asset playlist catalog",
         created_by  = "RoncaTech, LLC"
     )
 
