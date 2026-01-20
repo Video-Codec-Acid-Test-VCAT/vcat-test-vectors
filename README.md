@@ -66,6 +66,32 @@ python3 vcat_testvector_builder.py --input-folder /path/to/folder --catalog-file
 | `--catalog-filename` | Output filename for the catalog JSON | `vcat_testvector_playlist_catalog.json` |
 | `--description` | Description text for the catalog | `VCAT test vector playlist catalog` |
 | `--created-by` | Creator attribution in metadata | `RoncaTech, LLC` |
+| `--codec` | Only process videos in `media/<codec>` subfolder. Catalog will be named `vcat_<codec>_testvector_playlist_catalog.json` | None (process all) |
+| `--append_index` | Append to existing index file instead of overwriting | `false` |
+
+### Building Separate Codec Catalogs
+
+You can build separate catalogs for each codec type and combine them into a single index file using the `--codec` and `--append_index` parameters. 
+This results in a clean separation of codecs in the VCAT Import Test Vectors UI.
+
+**Example: Building AV1-FD2 and VVC catalogs with a combined index**
+
+```bash
+# First, build the AV1-FD2 catalog (creates index.json)
+python3 vcat_testvector_builder.py --codec av1-fd2
+
+# Then, build the VVC catalog and append to the existing index
+python3 vcat_testvector_builder.py --codec vvc --append_index
+```
+
+This produces:
+- `vcat_av1-fd2_testvector_playlist_catalog.json` - Catalog containing only AV1-FD2 test vectors
+- `vcat_vvc_testvector_playlist_catalog.json` - Catalog containing only VVC test vectors
+- `vcat_testvector_catalog_index.json` - Index file referencing both catalogs
+
+The catalog names will be formatted as "VCAT AV1-FD2 Testvector Playlist Catalog" and "VCAT VVC Testvector Playlist Catalog" respectively.
+
+**Note:** When using `--append_index`, if a catalog with the same URL already exists in the index, it will be replaced with the updated version (no duplicates).
 
 ### Configuration via settings.py
 

@@ -36,8 +36,10 @@ Generates video manifests, playlists, and catalog from a folder containing
 a 'media' subfolder with video assets.
 
 Usage:
-    python vcat_testvector_builder.py /path/to/folder
-    python vcat_testvector_builder.py /path/to/folder --output-dir ./output --created-by "Your Name"
+    python vcat_testvector_builder.py --input-folder /path/to/folder
+    python vcat_testvector_builder.py --input-folder /path/to/folder --created-by "Your Name"
+    python vcat_testvector_builder.py --codec av1                    # Only process media/av1 videos
+    python vcat_testvector_builder.py --codec av1 --append_index     # Process av1 and append to existing index
 """
 
 import argparse
@@ -73,21 +75,38 @@ class BuilderConfig:
         created_by: Optional[str] = None,
         catalog_filename: Optional[str] = None,
         description: Optional[str] = None,
+        codec: Optional[str] = None,
+        append_index: bool = False,
     ):
         self.input_folder = Path(input_folder).expanduser().resolve() if input_folder else cfg.BASE_OUTPUT_DIR
         # Output is always in input folder (relative paths require this)
         self.output_dir = self.input_folder
         self.manifest_dir = self.input_folder / "manifests"
         self.created_by = created_by or cfg.CREATED_BY
-        self.catalog_filename = catalog_filename or cfg.CATALOG_FILENAME
+        self.codec = codec
+        self.append_index = append_index
+
+        # Set catalog filename based on codec if specified
+        if catalog_filename:
+            self.catalog_filename = catalog_filename
+        elif codec:
+            self.catalog_filename = f"vcat_{codec}_testvector_playlist_catalog.json"
+        else:
+            self.catalog_filename = cfg.CATALOG_FILENAME
+
         self.description = description or cfg.CATALOG_DESCRIPTION
-        # Derive catalog name from filename (remove .json extension)
-        self.catalog_name = Path(self.catalog_filename).stem.replace("_", " ").title()
+        # Derive catalog name - VCAT and codec are uppercase, rest is title case
+        if codec:
+            self.catalog_name = f"VCAT {codec.upper()} Testvector Playlist Catalog"
+        else:
+            self.catalog_name = Path(self.catalog_filename).stem.replace("_", " ").title()
         self.index_name = "VCAT Test Vector Catalog Index"
         self.index_description = "Index of all VCAT test vector catalogs"
 
     @property
     def media_folder(self) -> Path:
+        if self.codec:
+            return self.input_folder / "media" / self.codec
         return self.input_folder / "media"
 
 
@@ -373,20 +392,40 @@ def generate_index(catalog_path: Path, config: BuilderConfig) -> Optional[Path]:
             description=hdr["description"]
         )
 
+        out_path = config.output_dir / "vcat_testvector_catalog_index.json"
+
+        # Check if we should append to existing index
+        existing_catalogs = []
+        if config.append_index and out_path.exists():
+            try:
+                existing_data = json.loads(out_path.read_text())
+                existing_catalogs = existing_data.get("catalogs", [])
+                # Filter out any existing entry with the same URL to avoid duplicates
+                existing_catalogs = [c for c in existing_catalogs if c.get("url") != rel_url]
+                print(f"  → Appending to existing index with {len(existing_catalogs)} catalog(s)")
+            except Exception as e:
+                print(f"  → Warning: Could not read existing index, creating new: {e}")
+
         index_header = VcatTestVectorHeader(
             name=config.index_name,
             description=config.index_description,
             created_by=config.created_by
         )
 
+        # Combine existing catalogs with new asset
+        all_catalogs = existing_catalogs + [asset.to_dict()]
+
         index = VcatTestVectorCatalogIndex(
             vcat_testvector_header=index_header,
-            catalogs=[asset]
+            catalogs=[]  # We'll set catalogs manually to preserve existing entries
         )
 
-        out_path = config.output_dir / "vcat_testvector_catalog_index.json"
+        # Build the final index dict manually to include existing catalogs
+        index_dict = index.to_dict()
+        index_dict["catalogs"] = all_catalogs
+
         with out_path.open("w") as f:
-            json.dump(index.to_dict(), f, indent=2)
+            json.dump(index_dict, f, indent=2)
 
         print(f"  ✔ {out_path.name}")
         return out_path
@@ -466,6 +505,8 @@ Examples:
   %(prog)s --input-folder /path/to/folder
   %(prog)s --input-folder /path/to/folder --created-by "Your Name"
   %(prog)s --input-folder /path/to/folder --catalog-filename my_catalog.json --description "My test vectors"
+  %(prog)s --codec av1                                    # Only process media/av1 videos
+  %(prog)s --codec av1 --append_index                     # Process av1 and append to existing index
         """
     )
 
@@ -497,6 +538,19 @@ Examples:
         help="Description for the catalog"
     )
 
+    parser.add_argument(
+        "--codec",
+        type=str,
+        default=None,
+        help="Only process videos in media/<codec> subfolder. Catalog will be named vcat_<codec>_testvector_playlist_catalog.json"
+    )
+
+    parser.add_argument(
+        "--append_index",
+        action="store_true",
+        help="Append to existing index file instead of overwriting"
+    )
+
     return parser.parse_args()
 
 
@@ -508,6 +562,8 @@ def main():
         created_by=args.created_by,
         catalog_filename=args.catalog_filename,
         description=args.description,
+        codec=args.codec,
+        append_index=args.append_index,
     )
 
     build(config)
