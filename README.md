@@ -40,7 +40,7 @@ my_test_vectors/
 ## Requirements
 
 - Python 3.9+
-- FFmpeg (must be installed and available in PATH)
+- FFmpeg, including `ffprobe` (must be installed and available in PATH)
 
 ## Usage
 
@@ -66,6 +66,7 @@ python3 vcat_testvector_builder.py --input-folder /path/to/folder --catalog-file
 | `--catalog-filename` | Output filename for the catalog JSON | `vcat_testvector_playlist_catalog.json` |
 | `--description` | Description text for the catalog | `VCAT test vector playlist catalog` |
 | `--created-by` | Creator attribution in metadata | `RoncaTech, LLC` |
+| `--name` | Display name for the catalog | Derived from codec or catalog filename |
 | `--codec` | Only process videos in `media/<codec>` subfolder. Catalog will be named `vcat_<codec>_testvector_playlist_catalog.json` | None (process all) |
 | `--append_index` | Append to existing index file instead of overwriting | `false` |
 
@@ -91,7 +92,22 @@ This produces:
 
 The catalog names will be formatted as "VCAT AV1-FD2 Testvector Playlist Catalog" and "VCAT VVC Testvector Playlist Catalog" respectively.
 
-**Note:** When using `--append_index`, if a catalog with the same URL already exists in the index, it will be replaced with the updated version (no duplicates).
+You can override the display name with `--name`.
+
+### Adding a New Set Alongside Existing Catalogs
+
+To introduce a new set of vectors without replacing catalogs already in the index (e.g. for a gradual transition), give the new catalog its own filename and name. Because the index matches entries by URL, a distinct `--catalog-filename` adds a new entry instead of replacing the existing one:
+
+```bash
+python3 vcat_testvector_builder.py --codec av1 --append_index \
+    --catalog-filename vcat_bm_av1_testvector_playlist_catalog.json \
+    --name "VCAT Demo BM AV1 Test Assets" \
+    --description "BM AV1 test asset playlist catalog"
+```
+
+Each catalog contains only the playlists generated in that run, so several codecs can share the same `manifests` folder.
+
+**Note:** When using `--append_index`, if a catalog with the same URL already exists in the index, it will be replaced in place with the updated version (no duplicates), and the existing index header is preserved.
 
 ### Configuration via settings.py
 
@@ -117,10 +133,13 @@ The builder generates:
 
 The tool automatically detects and labels:
 - AV1
+- AV2 (detected via the IVF `AV02` fourcc)
 - VP9
 - VVC
 
 Other codecs will be labeled as "Unknown".
+
+Video manifest names are built from the codec, resolution, and frame rate (e.g. `av1-1280X720p30fps`). If the filename contains a bitrate tag such as `_br0.5_`, it is appended (`av1-1280X720p30fps-br0.5`) so each rung of a bitrate ladder gets a unique name. For raw elementary streams with no container duration (e.g. `.266`), the duration is derived from the frame count.
 
 ## Disclaimer of Suitability
 

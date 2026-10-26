@@ -77,6 +77,7 @@ class BuilderConfig:
         description: Optional[str] = None,
         codec: Optional[str] = None,
         append_index: bool = False,
+        catalog_name: Optional[str] = None,
     ):
         self.input_folder = Path(input_folder).expanduser().resolve() if input_folder else cfg.BASE_OUTPUT_DIR
         # Output is always in input folder (relative paths require this)
@@ -96,7 +97,9 @@ class BuilderConfig:
 
         self.description = description or cfg.CATALOG_DESCRIPTION
         # Derive catalog name - VCAT and codec are uppercase, rest is title case
-        if codec:
+        if catalog_name:
+            self.catalog_name = catalog_name
+        elif codec:
             self.catalog_name = f"VCAT {codec.upper()} Testvector Playlist Catalog"
         else:
             self.catalog_name = Path(self.catalog_filename).stem.replace("_", " ").title()
@@ -134,48 +137,73 @@ def get_video_files_from_folder(media_folder: Path) -> List[Path]:
     return video_files
 
 
-def get_video_details(file_path: Path) -> tuple:
-    """Get video codec, duration, resolution, and frame rate using FFmpeg."""
+def _ffprobe_video(file_path: Path, count_packets: bool = False) -> dict:
+    """Run ffprobe on the first video stream and return the parsed JSON."""
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0"]
+    if count_packets:
+        cmd.append("-count_packets")
+    cmd += [
+        "-show_entries",
+        "stream=codec_name,codec_tag_string,width,height,r_frame_rate,duration,nb_read_packets:format=duration",
+        "-of", "json", str(file_path),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+    return json.loads(result.stdout)
+
+
+def _to_float(value) -> Optional[float]:
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-i", str(file_path)],
-            stderr=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True
-        )
-        stderr_output = result.stderr
+        f = float(value)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def get_video_details(file_path: Path) -> tuple:
+    """Get video codec, duration, resolution, and frame rate using ffprobe.
+
+    Raw elementary streams (e.g. .266) carry no container duration, so the
+    duration is derived from the packet count and frame rate in that case.
+    """
+    try:
+        info = _ffprobe_video(file_path)
+        stream = (info.get("streams") or [{}])[0]
 
         # Detect codec
-        if "Video: av1" in stderr_output:
+        codec_name = stream.get("codec_name", "")
+        # FFmpeg has no AV2 decoder yet, so fall back to the IVF fourcc
+        codec_tag = stream.get("codec_tag_string", "").upper()
+        if codec_name == "av2" or codec_tag == "AV02":
+            codec = "video/av2"
+        elif codec_name == "av1":
             codec = "video/av1"
-        elif "Video: vp9" in stderr_output:
+        elif codec_name == "vp9":
             codec = 'video/mp4; codecs="vp09"'
-        elif "Video: vvc" in stderr_output:
+        elif codec_name == "vvc":
             codec = 'video/mp4; codecs="vvc"'
         else:
             codec = "Unknown"
 
-        # Extract duration
-        duration_ms = None
-        duration_match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})", stderr_output)
-        if duration_match:
-            hours = int(duration_match.group(1))
-            minutes = int(duration_match.group(2))
-            seconds = int(duration_match.group(3))
-            milliseconds = int(duration_match.group(4)) * 10
-            duration_ms = (hours * 3600 + minutes * 60 + seconds) * 1000 + milliseconds
-
         # Extract resolution
         resolution_x_y = None
-        resolution_match = re.search(r", (\d+)x(\d+),", stderr_output)
-        if resolution_match:
-            resolution_x_y = f"{resolution_match.group(1)}X{resolution_match.group(2)}"
+        if stream.get("width") and stream.get("height"):
+            resolution_x_y = f"{stream['width']}X{stream['height']}"
 
         # Extract frame rate
-        frame_rate = "unknown"
-        frame_rate_match = re.search(r"(\d+(\.\d+)?) fps", stderr_output)
-        if frame_rate_match:
-            frame_rate = f"{float(frame_rate_match.group(1)):g}"
+        fps = None
+        num, _, den = stream.get("r_frame_rate", "0/0").partition("/")
+        if _to_float(num) and _to_float(den or "1"):
+            fps = float(num) / float(den or "1")
+        frame_rate = f"{round(fps, 3):g}" if fps else "unknown"
+
+        # Extract duration
+        duration_s = _to_float(info.get("format", {}).get("duration")) or _to_float(stream.get("duration"))
+        if duration_s is None and fps:
+            counted = (_ffprobe_video(file_path, count_packets=True).get("streams") or [{}])[0]
+            packets = _to_float(counted.get("nb_read_packets"))
+            if packets:
+                duration_s = packets / fps
+        duration_ms = round(duration_s * 1000) if duration_s else None
 
         return codec, duration_ms, resolution_x_y, frame_rate
 
@@ -190,6 +218,8 @@ def generate_header_title(video_file: str, video_mime_type: str, resolution_x_y:
 
     if 'av1' in video_mime_type.lower():
         base_name = f"av1-{resolution_x_y}p{frame_rate}fps"
+    elif 'av2' in video_mime_type.lower():
+        base_name = f"av2-{resolution_x_y}p{frame_rate}fps"
     elif 'vvc' in video_mime_type.lower():
         base_name = f"vvc-{resolution_x_y}p{frame_rate}fps"
     elif 'vp09' in video_mime_type.lower():
@@ -203,6 +233,11 @@ def generate_header_title(video_file: str, video_mime_type: str, resolution_x_y:
         if suffix in video_file:
             base_name += f'-{suffix}'
             break
+
+    # Handle bitrate ladder suffix (e.g. "_br0.5_") so rungs get unique names
+    br_match = re.search(r"_br(\d+(?:\.\d+)?)", Path(video_file).stem)
+    if br_match:
+        base_name += f"-br{br_match.group(1)}"
 
     return base_name
 
@@ -294,7 +329,8 @@ def generate_playlist_from_manifest(manifest_path: Path, config: BuilderConfig) 
             media_assets=[playlist_asset]
         )
 
-        out_path = config.manifest_dir / f"{playlist_header.name}_playlist.json"
+        video_name = manifest_path.name.removesuffix("_video_manifest.json")
+        out_path = config.manifest_dir / f"{video_name}_playlist.json"
         with out_path.open("w") as f:
             json.dump(playlist_manifest.to_dict(), f, indent=2)
 
@@ -310,9 +346,9 @@ def generate_playlist_from_manifest(manifest_path: Path, config: BuilderConfig) 
 # Catalog Generation
 # -----------------------------------------------------------------------------
 
-def generate_catalog(config: BuilderConfig) -> Optional[Path]:
-    """Generate catalog from all playlists."""
-    playlist_files = list(config.manifest_dir.glob("*_playlist.json"))
+def generate_catalog(config: BuilderConfig, playlist_files: List[Path]) -> Optional[Path]:
+    """Generate catalog from the given playlists."""
+    playlist_files = sorted(playlist_files)
 
     if not playlist_files:
         print("  ✗ No playlist files found")
@@ -396,32 +432,34 @@ def generate_index(catalog_path: Path, config: BuilderConfig) -> Optional[Path]:
 
         # Check if we should append to existing index
         existing_catalogs = []
+        existing_header = None
         if config.append_index and out_path.exists():
             try:
                 existing_data = json.loads(out_path.read_text())
                 existing_catalogs = existing_data.get("catalogs", [])
-                # Filter out any existing entry with the same URL to avoid duplicates
-                existing_catalogs = [c for c in existing_catalogs if c.get("url") != rel_url]
+                existing_header = existing_data.get("vcat_testvector_header")
                 print(f"  → Appending to existing index with {len(existing_catalogs)} catalog(s)")
             except Exception as e:
                 print(f"  → Warning: Could not read existing index, creating new: {e}")
 
-        index_header = VcatTestVectorHeader(
-            name=config.index_name,
-            description=config.index_description,
-            created_by=config.created_by
-        )
+        # Replace any existing entry with the same URL in place, otherwise append
+        all_catalogs = [asset.to_dict() if c.get("url") == rel_url else c for c in existing_catalogs]
+        if not any(c.get("url") == rel_url for c in existing_catalogs):
+            all_catalogs.append(asset.to_dict())
 
-        # Combine existing catalogs with new asset
-        all_catalogs = existing_catalogs + [asset.to_dict()]
-
-        index = VcatTestVectorCatalogIndex(
-            vcat_testvector_header=index_header,
-            catalogs=[]  # We'll set catalogs manually to preserve existing entries
-        )
-
-        # Build the final index dict manually to include existing catalogs
-        index_dict = index.to_dict()
+        if existing_header:
+            index_dict = {"vcat_testvector_header": existing_header}
+        else:
+            index_header = VcatTestVectorHeader(
+                name=config.index_name,
+                description=config.index_description,
+                created_by=config.created_by
+            )
+            index = VcatTestVectorCatalogIndex(
+                vcat_testvector_header=index_header,
+                catalogs=[]  # We'll set catalogs manually to preserve existing entries
+            )
+            index_dict = index.to_dict()
         index_dict["catalogs"] = all_catalogs
 
         with out_path.open("w") as f:
@@ -479,7 +517,7 @@ def build(config: BuilderConfig):
 
     # Step 3: Generate catalog
     print("Step 3: Generating catalog...")
-    catalog_path = generate_catalog(config)
+    catalog_path = generate_catalog(config, playlist_paths)
     print()
 
     # Step 4: Generate index
@@ -539,6 +577,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Display name for the catalog (default: derived from codec or catalog filename)"
+    )
+
+    parser.add_argument(
         "--codec",
         type=str,
         default=None,
@@ -564,6 +609,7 @@ def main():
         description=args.description,
         codec=args.codec,
         append_index=args.append_index,
+        catalog_name=args.name,
     )
 
     build(config)
